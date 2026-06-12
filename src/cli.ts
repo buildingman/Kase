@@ -5,6 +5,7 @@ import { runDoctor } from "./run/doctor.js";
 import { runLint } from "./lint/index.js";
 import { compileCase } from "./compile/index.js";
 import { runCase } from "./run/index.js";
+import { runHierarchy } from "./run/hierarchy.js";
 import { log } from "./utils/log.js";
 
 const program = new Command();
@@ -54,6 +55,16 @@ program
     const config = loadConfig();
     const result = await runCase(casePath, config);
     process.exit(result.ok ? 0 : 1);
+  });
+
+program
+  .command("hierarchy")
+  .argument("[keyword]", "可选：仅显示 text/label/id 含该关键字的元素")
+  .description("抓取当前模拟器页面的视图层级，用于查询图标真实可定位文本/ID")
+  .action(async (keyword?: string) => {
+    const config = loadConfig();
+    const ok = await runHierarchy(config, { keyword });
+    process.exit(ok ? 0 : 1);
   });
 
 // 预加载配置以尽早暴露配置错误（当前仅校验可加载）

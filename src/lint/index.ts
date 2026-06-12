@@ -3,8 +3,9 @@ import { lintCaseFile } from "./parser.js";
 import type { CaseIR } from "./types.js";
 import { log } from "../utils/log.js";
 
-/** 把 IR 摘要打印出来，便于人工确认解析结果 */
-function printSummary(ir: CaseIR): void {
+/** 把单个 case 的 IR 摘要打印出来，便于人工确认解析结果 */
+function printCaseSummary(ir: CaseIR, headerLabel: string): void {
+  log.dim(headerLabel);
   const sections: Array<[string, typeof ir.given]> = [
     ["前提", ir.given],
     ["当", ir.when],
@@ -16,8 +17,12 @@ function printSummary(ir: CaseIR): void {
     for (const a of actions) {
       const extra = [
         a.target ? `target="${a.target}"` : "",
+        a.selector
+          ? `selector=${a.selector.kind}:"${a.selector.value}"`
+          : "",
         a.value ? `value="${a.value}"` : "",
         a.direction ? `dir=${a.direction}` : "",
+        a.timeoutMs ? `timeout=${a.timeoutMs}ms` : "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -35,7 +40,7 @@ export function runLint(casePath: string): boolean {
     return false;
   }
 
-  const { ir, errors } = lintCaseFile(casePath);
+  const { cases, errors } = lintCaseFile(casePath);
 
   if (errors.length > 0) {
     for (const e of errors) {
@@ -47,9 +52,12 @@ export function runLint(casePath: string): boolean {
     return false;
   }
 
-  const total = ir.given.length + ir.when.length + ir.then.length;
-  printSummary(ir);
-  log.success(`校验通过，共解析 ${total} 个动作。`);
+  let total = 0;
+  cases.forEach((c, i) => {
+    total += c.given.length + c.when.length + c.then.length;
+    printCaseSummary(c, `Case #${i + 1}（行 ${c.startLine}）`);
+  });
+  log.success(`校验通过，共 ${cases.length} 个 case，${total} 个动作。`);
   return true;
 }
 

@@ -1,0 +1,37 @@
+# Kase 项目级 selector 别名表
+# ────────────────────────────────────────────────────────────────
+# 这里集中维护"中文别名 → 结构化定位"的映射。
+# BDD 用例里只写人话：
+#   - 点击图标 "右上角设置"
+# 编译后变成：
+#   - tapOn:
+#       id: "homeSettingsButton"
+#
+# 字段优先级：id > point > text
+#   - id    推荐：让开发协作给关键控件加 accessibilityIdentifier，最稳
+#   - point 兜底：拿不到 id 时用屏幕百分比坐标（如 "95%, 8%"）
+#   - text  极少：仅在你确定该图标有特殊 a11y label 时使用
+#
+# 跑 `npm run kase -- hierarchy <关键字>` 可以查图标真实 id / a11y label。
+# ────────────────────────────────────────────────────────────────
+
+
+# === iOS Photos demo 用到的别名 ===
+
+# 搜索按钮（系统 app 拿不到 accessibilityIdentifier，演示坐标兜底）
+# iPhone 17 上搜索按钮在底部右下角附近：约 95% 横向、约 90% 纵向
+搜索按钮: { point: "85%, 92%" }
+
+
+# === 一些常见模式（你项目里可参考） ===
+
+# 推荐：业务 app 给关键控件加 accessibilityIdentifier 后这样写
+# 右上角设置: { id: "homeSettingsButton" }
+# 关闭弹窗:   { id: "ic_close" }
+# 提交按钮:   { id: "submit_btn" }
+
+# 兜底：纯图标且无 id 时
+# 悬浮添加按钮: { point: "50%, 95%" }
+
+# 罕见：a11y label 是非显而易见的文本
+# 心愿单图标:   { text: "Wishlist" }

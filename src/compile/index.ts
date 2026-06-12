@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import type { KaseConfig } from "../config/index.js";
 import { lintCaseFile } from "../lint/parser.js";
+import type { CaseIR } from "../lint/types.js";
 import { compileWithAI } from "./ai.js";
 import { validateMaestroYaml } from "./validate.js";
 import { log } from "../utils/log.js";
@@ -18,9 +19,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface CompileResult {
   ok: boolean;
-  /** 固化后的 yaml 路径 */
-  outputPath?: string;
-  /** 是否命中缓存 */
+  /** 每个 case 对应的固化 yaml 路径（与源文件中的 case 顺序一致） */
+  outputPaths?: string[];
+  /** 是否全部命中缓存 */
   cached?: boolean;
   errors?: string[];
 }
@@ -38,11 +39,16 @@ function loadSystemPrompt(config: KaseConfig): string {
   throw new Error("找不到 prompts/compile-system.txt");
 }
 
-/** 计算缓存 key：case内容 + DSL版本 + model */
-function computeHash(content: string, config: KaseConfig): string {
-  // 把 provider/baseUrl 也算进 hash，避免切换供应商时复用旧缓存
+/** 计算缓存 key：单个 case 的 IR 内容 + DSL版本 + provider + model */
+function computeHash(ir: CaseIR, config: KaseConfig): string {
+  // 基于 IR 内容稳定序列化做 hash，文件中其他 case 的改动不会让本 case 失效
+  const irKey = JSON.stringify({
+    given: ir.given.map((a) => ({ ...a, line: undefined, raw: undefined })),
+    when: ir.when.map((a) => ({ ...a, line: undefined, raw: undefined })),
+    then: ir.then.map((a) => ({ ...a, line: undefined, raw: undefined })),
+  });
   return createHash("sha256")
-    .update(content)
+    .update(irKey)
     .update(config.dslVersion)
     .update(config.provider)
     .update(config.baseUrl)
@@ -51,17 +57,35 @@ function computeHash(content: string, config: KaseConfig): string {
     .slice(0, 12);
 }
 
-/** 固化文件路径：compiled/<caseName>.yaml */
-function outputPathFor(casePath: string, config: KaseConfig): string {
+/**
+ * 固化文件路径：
+ *   - 单 case：compiled/<caseName>.yaml
+ *   - 多 case：compiled/<caseName>__<idx>.yaml（idx 从 1 开始）
+ */
+function outputPathFor(
+  casePath: string,
+  config: KaseConfig,
+  index: number,
+  total: number,
+): string {
   const name = basename(casePath).replace(/\.case$/, "");
-  return join(process.cwd(), config.dirs.compiled, `${name}.yaml`);
+  const suffix = total > 1 ? `__${index}` : "";
+  return join(process.cwd(), config.dirs.compiled, `${name}${suffix}.yaml`);
 }
 
 /** 给固化 YAML 加元信息头 */
-function withMeta(yaml: string, casePath: string, hash: string, model: string): string {
+function withMeta(
+  yaml: string,
+  casePath: string,
+  hash: string,
+  model: string,
+  caseIndex: number,
+  caseTotal: number,
+): string {
   const meta = [
     `# === Kase 固化产物（请勿手改，由 .case 编译生成）===`,
     `# source: ${casePath}`,
+    `# case:   ${caseIndex}/${caseTotal}`,
     `# hash:   ${hash}`,
     `# model:  ${model}`,
     `# time:   ${new Date().toISOString()}`,
@@ -79,7 +103,8 @@ function readCachedHash(outputPath: string): string | null {
 }
 
 /**
- * 编译单个 .case：lint → (缓存命中?) → AI 编译 → YAML 校验 → 固化。
+ * 编译单个 .case 文件中的所有 case：lint → 对每个 case (缓存命中?) → AI 编译 → YAML 校验 → 固化。
+ * 任何一个 case 失败即整体失败（早期返回，避免后续浪费 AI 调用）。
  */
 export async function compileCase(
   casePath: string,
@@ -89,8 +114,8 @@ export async function compileCase(
     return { ok: false, errors: [`文件不存在：${casePath}`] };
   }
 
-  // 1. lint
-  const { ir, errors: lintErrors } = lintCaseFile(casePath);
+  // 1. lint —— 一次性解析整个文件，可能产出多个 case
+  const { cases, errors: lintErrors } = lintCaseFile(casePath);
   if (lintErrors.length > 0) {
     return {
       ok: false,
@@ -99,39 +124,64 @@ export async function compileCase(
       ),
     };
   }
-
-  const rawContent = readFileSync(casePath, "utf8");
-  const hash = computeHash(rawContent, config);
-  const outputPath = outputPathFor(casePath, config);
-
-  // 2. 缓存命中检查
-  if (readCachedHash(outputPath) === hash) {
-    log.success(`命中缓存，跳过 AI 编译：${outputPath}`);
-    return { ok: true, outputPath, cached: true };
+  if (cases.length === 0) {
+    return { ok: false, errors: ["未解析到任何 case"] };
   }
 
-  // 3. AI 编译
-  log.step(`调用 AI 编译（model=${config.model}）...`);
-  const systemPrompt = loadSystemPrompt(config);
-  let yaml: string;
-  try {
-    yaml = await compileWithAI(ir, systemPrompt, config);
-  } catch (e) {
-    return { ok: false, errors: [`AI 编译失败：${(e as Error).message}`] };
-  }
-
-  // 4. YAML 校验（防幻觉）
-  const validation = validateMaestroYaml(yaml);
-  if (!validation.ok) {
-    return {
-      ok: false,
-      errors: ["AI 生成的 YAML 未通过校验：", ...validation.errors],
-    };
-  }
-
-  // 5. 固化
   mkdirSync(join(process.cwd(), config.dirs.compiled), { recursive: true });
-  writeFileSync(outputPath, withMeta(yaml, casePath, hash, config.model), "utf8");
-  log.success(`已固化：${outputPath}`);
-  return { ok: true, outputPath, cached: false };
+
+  const systemPrompt = loadSystemPrompt(config);
+  const outputPaths: string[] = [];
+  let allCached = true;
+
+  for (let i = 0; i < cases.length; i++) {
+    const ir = cases[i];
+    const idx1 = i + 1;
+    const outputPath = outputPathFor(casePath, config, idx1, cases.length);
+    const hash = computeHash(ir, config);
+    const tag = cases.length > 1 ? `[case ${idx1}/${cases.length}] ` : "";
+
+    // 2. 缓存命中检查
+    if (readCachedHash(outputPath) === hash) {
+      log.success(`${tag}命中缓存，跳过 AI 编译：${outputPath}`);
+      outputPaths.push(outputPath);
+      continue;
+    }
+
+    // 3. AI 编译
+    log.step(`${tag}调用 AI 编译（model=${config.model}）...`);
+    let yaml: string;
+    try {
+      yaml = await compileWithAI(ir, systemPrompt, config);
+    } catch (e) {
+      return {
+        ok: false,
+        errors: [`${tag}AI 编译失败：${(e as Error).message}`],
+      };
+    }
+
+    // 4. YAML 校验（防幻觉）
+    const validation = validateMaestroYaml(yaml);
+    if (!validation.ok) {
+      return {
+        ok: false,
+        errors: [
+          `${tag}AI 生成的 YAML 未通过校验：`,
+          ...validation.errors,
+        ],
+      };
+    }
+
+    // 5. 固化
+    writeFileSync(
+      outputPath,
+      withMeta(yaml, casePath, hash, config.model, idx1, cases.length),
+      "utf8",
+    );
+    log.success(`${tag}已固化：${outputPath}`);
+    outputPaths.push(outputPath);
+    allCached = false;
+  }
+
+  return { ok: true, outputPaths, cached: allCached };
 }
