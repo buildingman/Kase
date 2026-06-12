@@ -1,23 +1,14 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { KaseConfig } from "../config/index.js";
 import { exec } from "../utils/exec.js";
+import { envWithJavaHome } from "../utils/java.js";
 import { log } from "../utils/log.js";
 
 export interface ExecuteResult {
   ok: boolean;
   exitCode: number;
   reportDir: string;
-}
-
-/** Maestro 依赖的 JAVA_HOME（brew openjdk@21）；若环境已设置则沿用 */
-const DEFAULT_JAVA_HOME =
-  "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home";
-
-function resolveJavaHome(): string {
-  return process.env.JAVA_HOME && existsSync(process.env.JAVA_HOME)
-    ? process.env.JAVA_HOME
-    : DEFAULT_JAVA_HOME;
 }
 
 /**
@@ -33,7 +24,6 @@ export async function executeFlow(
     return { ok: false, exitCode: -1, reportDir: "" };
   }
 
-  const javaHome = resolveJavaHome();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const reportDir = join(process.cwd(), config.dirs.reports, stamp);
   mkdirSync(reportDir, { recursive: true });
@@ -60,11 +50,7 @@ export async function executeFlow(
 
   const res = await exec("maestro", args, {
     inherit: true,
-    env: {
-      JAVA_HOME: javaHome,
-      PATH: `${javaHome}/bin:${process.env.PATH ?? ""}`,
-      MAESTRO_CLI_NO_ANALYTICS: "1",
-    },
+    env: envWithJavaHome(),
   });
 
   const ok = res.code === 0;

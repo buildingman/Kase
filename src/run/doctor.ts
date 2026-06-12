@@ -1,4 +1,5 @@
 import { exec, commandExists } from "../utils/exec.js";
+import { envWithJavaHome } from "../utils/java.js";
 import { log } from "../utils/log.js";
 
 interface CheckResult {
@@ -31,7 +32,8 @@ async function checkNode(): Promise<CheckResult> {
 }
 
 async function checkJava(): Promise<CheckResult> {
-  const res = await exec("java", ["-version"]);
+  // 自动识别 brew openjdk@21 路径，无需用户预先 export JAVA_HOME
+  const res = await exec("java", ["-version"], { env: envWithJavaHome() });
   // java -version 输出在 stderr
   const text = res.stderr || res.stdout;
   const match = text.match(/version "(\d+)(?:\.(\d+))?/);
@@ -43,7 +45,7 @@ async function checkJava(): Promise<CheckResult> {
     detail: versionLine,
     hint:
       major < 17
-        ? "Maestro 需要 JDK 17+，推荐 21：brew install openjdk@21 并设置 JAVA_HOME"
+        ? "Maestro 需要 JDK 17+，推荐运行 `bash setup.sh` 自动安装并配置 JAVA_HOME"
         : undefined,
   };
 }
@@ -58,9 +60,8 @@ async function checkMaestro(): Promise<CheckResult> {
       hint: "brew install mobile-dev-inc/tap/maestro",
     };
   }
-  const res = await exec("maestro", ["-v"], {
-    env: { MAESTRO_CLI_NO_ANALYTICS: "1" },
-  });
+  // Maestro 也需要 JAVA_HOME 才能跑 -v
+  const res = await exec("maestro", ["-v"], { env: envWithJavaHome() });
   const version = res.stdout.trim().split("\n").pop()?.trim() ?? "";
   return {
     name: "Maestro CLI",
